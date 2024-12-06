@@ -1,4 +1,4 @@
-# Modélisation de nombres réclamations
+# Modélisation de nombre de réclamation
 Méthode utilisé :
   - GLM
   - Random forest
