@@ -1,0 +1,166 @@
+---
+title: "Modelisation de sinistralité"
+author: "Bertrand GAKIZA"
+format: html
+editor: visual
+---
+
+## 
+
+```{r}
+data <- read.csv("freMTPL2freq.csv", row.names=1, stringsAsFactors=TRUE)
+```
+
+# Exploration
+
+```{r}
+str(data)
+```
+
+```{r}
+hist(data$ClaimNb)
+```
+
+```{r}
+summary(data)
+```
+
+```{r}
+data$ClaimNb <- pmin(data$ClaimNb, 4)
+data$VehAge <- pmin(data$VehAge, 40)
+data$Exposure <- pmin(data$Exposure, 1)
+```
+
+```{r fig.width=9, fig.height=3.5}
+library(dplyr)
+
+# 
+data %>% 
+  mutate(VehAgeS=as.factor(pmin(VehAge, 4))) %>% 
+  group_by(VehBrand,VehAgeS,VehGas) %>% 
+  summarize(claim_frequency=sum(as.double(ClaimNb))/sum(Exposure), expo=sum(Exposure)) %>% 
+  filter(expo>=100)  %>% 
+  ggplot(aes(x=VehBrand, y=claim_frequency, color=VehAgeS)) + 
+  facet_grid(. ~ VehGas) + 
+  geom_point(size=5,shape=15) + theme_light(base_size = 16)
+```
+
+```{r}
+
+# Charger les bibliothèques nécessaires
+library(MASS)          # Pour la régression négative binomiale
+library(randomForest)  # Pour la forêt aléatoire
+library(Metrics)       # Pour les métriques de performance
+library(ggplot2)  
+```
+
+# Séparation des données
+
+```{r}
+# Division des données en ensemble d'entraînement (70%) et de test (30%)
+set.seed(123)  # Pour reproductibilité
+train_indices <- sample(1:nrow(data), size = 0.7 * nrow(data))
+train_data <- data[train_indices, ]
+test_data <- data[-train_indices, ]
+```
+
+```{r}
+# Vérification de la sur-dispersion
+mean_claims <- mean(data$ClaimNb)
+var_claims <- var(data$ClaimNb)
+
+cat("Moyenne de ClaimNb :", mean_claims, "\n")
+cat("Variance de ClaimNb :", var_claims, "\n")
+
+if (var_claims > mean_claims) {
+  cat("Attention : Sur-dispersion détectée (variance > moyenne).\n")
+} else {
+  cat("Pas de sur-dispersion détectée (variance ≈ moyenne).\n")
+}
+
+```
+
+# Modele GLM(NbNeg)
+
+```{r}
+library(glmmTMB)
+
+
+# Ajustement du modèle sur les données d'entraînement
+model_negbin_tmb <- glmmTMB(ClaimNb ~ factor(Area) + VehPower + VehAge + DrivAge +
+                              BonusMalus + factor(VehBrand) + factor(VehGas) +
+                              Density + 
+                              DrivAge:VehAge +
+                              factor(Area):Density +
+                              BonusMalus:factor(Region) +
+                              factor(VehBrand):factor(VehGas) +
+                              VehPower:VehAge + 
+                              offset(log(Exposure)), 
+                            family = nbinom2(link = "log"), 
+                            data = train_data)
+
+# Résumé du modèle
+summary(model_negbin_tmb)
+
+# Prédictions sur l'ensemble de test
+predictions <- predict(model_negbin_tmb, newdata = test_data, type = "response")
+
+# Affichage des premières prédictions
+head(predictions)
+
+
+```
+
+# Modèle Radom Forest
+
+```{r}
+# Vérification et conversion en facteurs
+data$Area <- as.factor(data$Area)
+data$VehBrand <- as.factor(data$VehBrand)
+data$VehGas <- as.factor(data$VehGas)
+data$Region <- as.factor(data$Region)
+
+# Création de la variable de fréquence
+train_data$ClaimFrequency <- train_data$ClaimNb / train_data$Exposure
+
+library(randomForest)
+
+# Ajustement du modèle Random Forest sur les données d'entraînement
+rf_model <- randomForest(ClaimNb ~ factor(Area) + VehPower + VehAge + DrivAge +
+                           BonusMalus + factor(VehBrand) + factor(VehGas) +
+                           Density,  # Simplifié pour Random Forest
+                         data = train_data, 
+                         ntree = 500, 
+                         importance = TRUE)
+
+# Prédictions sur l'ensemble de test
+rf_predictions <- predict(rf_model, newdata = test_data)
+
+
+
+
+```
+
+```{r}
+# Analyse de l'importance des variables
+importance(rf_model)
+varImpPlot(rf_model)
+```
+
+# Analyse des résidus
+
+```{r}
+# Résidus pour Random Forest
+rf_residuals <- test_data$ClaimNb - rf_predictions
+
+# Résidus pour GLMM binomial négatif
+glmm_residuals <- test_data$ClaimNb - glmm_predictions
+
+```
+
+```{r}
+```
+
+
+
+The `echo: false` option disables the printing of code (only output is displayed).
